@@ -35,7 +35,21 @@ const publicProfiles = (db: Database) => db.users.map(({ profile: p }) => p.type
 async function handle(request: NextRequest, context: { params: Promise<{ resource: string }> }) {
   const { resource } = await context.params;
   if (!["auth", "marketplace", "preferences", "orders", "incoming-orders", "contact"].includes(resource)) return NextResponse.json({ error: "غير موجود" }, { status: 404 });
-  if (request.method !== "GET" && request.headers.get("origin") && request.headers.get("origin") !== request.nextUrl.origin) return NextResponse.json({ error: "طلب غير مسموح" }, { status: 403 });
+  // Behind Render's reverse proxy, request.nextUrl.origin may contain an internal
+  // host. Compare against the public Host header instead, while keeping CSRF
+  // protection for browser requests that supply Origin.
+  const requestOrigin = request.headers.get("origin");
+  if (request.method !== "GET" && requestOrigin) {
+    let allowed = false;
+    try {
+      const incomingOrigin = new URL(requestOrigin);
+      const host = request.headers.get("host");
+      allowed = Boolean(host && incomingOrigin.host.toLowerCase() === host.toLowerCase() &&
+        (incomingOrigin.protocol === "https:" ||
+          (process.env.NODE_ENV !== "production" && incomingOrigin.protocol === "http:")));
+    } catch { /* Invalid Origin must be rejected. */ }
+    if (!allowed) return NextResponse.json({ error: "طلب غير مسموح" }, { status: 403 });
+  }
   let input: Record<string, unknown> = {};
   try {
     if (request.method !== "GET" && request.method !== "DELETE") {
